@@ -1,0 +1,82 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dashboard</title>
+  <style>
+    body { margin:0; font-family:Arial,sans-serif; background:#f3f4f6; color:#111827; }
+    .topbar { background:#111827; color:#fff; display:flex; justify-content:space-between; align-items:center; padding:18px 28px; }
+    a { color:#2563eb; text-decoration:none; }
+    .topbar a { color:#fff; text-decoration:none; }
+    .container { max-width:1120px; margin:24px auto; padding:0 18px; }
+    .panel { background:white; border-radius:14px; padding:20px; box-shadow:0 6px 12px rgba(0,0,0,.08); margin-bottom:20px; }
+    .create-row { display:flex; gap:12px; }
+    input { flex:1; padding:10px; border:1px solid #d1d5db; border-radius:10px; }
+    button { background:#2563eb; color:#fff; border:none; border-radius:10px; padding:10px 12px; cursor:pointer; }
+    .grid { display:grid; grid-template-columns:1fr 1fr; gap:18px; }
+    .item { border:1px solid #e5e7eb; border-radius:10px; padding:12px 14px; margin-top:10px; }
+    .meta { color:#6b7280; font-size:.9rem; }
+  </style>
+</head>
+<body>
+  <div class="topbar">
+    <div><strong>SyncWrite</strong> / Dashboard</div>
+    <a href="{{ url_for('logout') }}">Logout</a>
+  </div>
+  <div class="container">
+    <div class="panel">
+      <h2>Welcome, {{ user['name'] }}</h2>
+      <form class="create-row" method="post" action="{{ url_for('create_document') }}">
+        <input type="text" name="title" placeholder="New document title" required>
+        <button type="submit">Create Document</button>
+      </form>
+      <form method="get" action="{{ url_for('dashboard') }}" style="margin-top:16px; display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
+        <input type="search" name="q" placeholder="Search documents" value="{{ search_query or '' }}" style="flex:1; padding:10px; border:1px solid #d1d5db; border-radius:10px;">
+        <button type="submit">Search</button>
+        {% if search_query %}
+        <a href="{{ url_for('dashboard') }}" style="display:inline-flex; align-items:center; justify-content:center; padding:10px 12px; border-radius:10px; background:#f3f4f6; color:#111827; text-decoration:none;">Clear</a>
+        {% endif %}
+      </form>
+    </div>
+
+    <div class="grid">
+      <div class="panel">
+        <h3>Owned Documents</h3>
+        {% for doc in owned_docs %}
+          <div class="item">
+            <div><a href="{{ url_for('document_detail', document_id=doc['id']) }}">{{ doc['title'] }}</a></div>
+            <div class="meta">Owner: {{ doc['owner_name'] }} · Created: {{ doc['created_at'] }} · Last Modified: {{ doc['updated_at'] }}</div>
+          </div>
+        {% else %}
+          <p>No owned documents yet.</p>
+        {% endfor %}
+      </div>
+
+      <div class="panel">
+        <h3>Shared With Me</h3>
+        {% for doc in shared_docs %}
+          <div class="item">
+            <div><a href="{{ url_for('document_detail', document_id=doc['id']) }}">{{ doc['title'] }}</a></div>
+            <div class="meta">Owner: {{ doc['owner_name'] }} · Permission: {{ doc['permission'] }} · Created: {{ doc['created_at'] }} · Last Modified: {{ doc['updated_at'] }}</div>
+          </div>
+        {% else %}
+          <p>No shared documents.</p>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div class="panel">
+      <h3>Recently Opened</h3>
+      {% for doc in recent_docs %}
+        <div class="item">
+          <div><a href="{{ url_for('document_detail', document_id=doc['id']) }}">{{ doc['title'] }}</a></div>
+          <div class="meta">Owner: {{ doc['owner_name'] }} · Created: {{ doc['created_at'] }} · Last Modified: {{ doc['updated_at'] }}</div>
+        </div>
+      {% else %}
+        <p>No recent documents.</p>
+      {% endfor %}
+    </div>
+  </div>
+</body>
+</html>

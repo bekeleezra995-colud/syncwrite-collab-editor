@@ -1,0 +1,41 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ document['title'] }} History</title>
+  <style>
+    body { margin:0; font-family:Arial,sans-serif; background:#f3f4f6; }
+    .wrap { max-width:1000px; margin:40px auto; background:#fff; border-radius:14px; box-shadow:0 10px 20px rgba(0,0,0,.08); padding:24px; }
+    table { width:100%; border-collapse:collapse; }
+    th, td { text-align:left; padding:12px; border-bottom:1px solid #e5e7eb; }
+    button { background:#2563eb; color:white; border:none; border-radius:8px; padding:8px 12px; cursor:pointer; }
+    a { color:#2563eb; text-decoration:none; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h2><a href="{{ url_for('document_detail', document_id=document['id']) }}">{{ document['title'] }}</a> / Version History</h2>
+    <table>
+      <thead>
+        <tr><th>Revision</th><th>Summary</th><th>Editor</th><th>Created</th><th>Action</th></tr>
+      </thead>
+      <tbody>
+        {% for revision in revisions %}
+        <tr>
+          <td>{{ revision['revision_number'] }}</td>
+          <td>{{ revision['summary'] }}</td>
+          <td>{{ revision['editor_name'] }}</td>
+          <td>{{ revision['created_at'] }}</td>
+          <td>
+            <form action="{{ url_for('restore_revision', document_id=document['id'], revision_id=revision['id']) }}" method="post">
+              <button type="submit">Restore</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</body>
+</html>

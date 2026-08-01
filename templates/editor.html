@@ -1,0 +1,297 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ document['title'] }}</title>
+  <link href="https://cdn.quilljs.com/1.3.7/quill.snow.css" rel="stylesheet">
+  <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+  <style>
+    body { margin:0; font-family:Arial,sans-serif; background:#f3f4f6; color:#111827; }
+    .topbar { background:#111827; color:white; display:flex; justify-content:space-between; align-items:center; padding:18px 28px; }
+    .topbar a { color:white; text-decoration:none; }
+    .workspace { max-width:1400px; margin:20px auto; display:grid; grid-template-columns:1fr 320px; gap:20px; padding:0 18px; }
+    .panel { background:white; border-radius:14px; padding:18px; box-shadow:0 6px 12px rgba(0,0,0,.08); }
+    .toolbar { display:flex; gap:10px; align-items:center; margin-bottom:16px; flex-wrap:wrap; }
+    .toolbar input { flex:1; padding:10px; border:1px solid #d1d5db; border-radius:8px; }
+    .toolbar button { background:#2563eb; color:white; border:none; border-radius:8px; padding:10px 12px; cursor:pointer; }
+    .toolbar .danger { background:#ef4444; }
+    .toolbar .theme-btn { background:#475569; }
+    .badge { display:inline-block; background:#dbeafe; color:#1d4ed8; border-radius:999px; padding:6px 10px; margin-bottom:12px; }
+    .dark-mode body, .dark-mode html { background:#0f172a; color:#e2e8f0; }
+    .dark-mode .topbar { background:#111827; }
+    .dark-mode .panel { background:#111827; color:#e2e8f0; }
+    .dark-mode .toolbar input,
+    .dark-mode textarea,
+    .dark-mode select { background:#1f2937; color:#e2e8f0; border:1px solid #374151; }
+    .dark-mode .badge { background:#1e293b; color:#93c5fd; }
+    .dark-mode .tiny-btn { background:#334155; color:#e2e8f0; }
+    .dark-mode .btn { background:#2563eb; }
+    .dark-mode .presence-item,
+    .dark-mode .comment-item,
+    .dark-mode .revision-item { background:#111827; border-color:#1f2937; }
+    .ql-container { height:560px; }
+    .section { margin-top:20px; }
+    .presence-list, .comment-list, .revision-list { display:flex; flex-direction:column; gap:10px; }
+    .presence-item, .comment-item, .revision-item { border:1px solid #e5e7eb; border-radius:10px; padding:10px; }
+    .comment-item { background:#fafafa; }
+    .comment-item.reply { margin-left:18px; border-left:3px solid #bfdbfe; }
+    .comment-actions { display:flex; gap:8px; flex-wrap:wrap; margin-top:8px; }
+    .tiny-btn { background:#e5e7eb; color:#111827; border:none; border-radius:6px; padding:5px 8px; cursor:pointer; font-size:.75rem; }
+    .tiny-btn.danger { background:#fee2e2; color:#991b1b; }
+    .tiny-btn.success { background:#dcfce7; color:#166534; }
+    .presence-row { display:flex; justify-content:space-between; align-items:center; gap:8px; }
+    .presence-badge { display:inline-flex; align-items:center; gap:6px; background:#dcfce7; color:#166534; border-radius:999px; padding:4px 8px; font-size:.75rem; font-weight:bold; }
+    .presence-dot { width:8px; height:8px; border-radius:50%; background:#16a34a; display:inline-block; }
+    textarea, select { width:100%; box-sizing:border-box; padding:10px; border:1px solid #d1d5db; border-radius:8px; }
+    .btn { background:#2563eb; color:white; border:none; border-radius:8px; padding:9px 12px; cursor:pointer; }
+    .muted { color:#6b7280; font-size:.85rem; }
+  </style>
+</head>
+<body>
+  <div class="topbar">
+    <div><strong>SyncWrite</strong> / {{ document['title'] }}</div>
+    <a href="{{ url_for('dashboard') }}">Dashboard</a>
+  </div>
+
+  <div class="workspace">
+    <div class="panel">
+      <div class="toolbar">
+        <input id="docTitleInput" type="text" value="{{ document['title'] }}">
+        <form action="{{ url_for('rename_document', document_id=document['id']) }}" method="post" style="display:flex; gap:8px; margin:0;">
+          <input type="hidden" name="title" id="titleHidden" value="{{ document['title'] }}">
+          <button type="submit">Rename</button>
+        </form>
+        <form action="{{ url_for('duplicate_document', document_id=document['id']) }}" method="post" style="margin:0;">
+          <button type="submit">Duplicate</button>
+        </form>
+        {% if document['owner_id'] == current_user['id'] %}
+        <form action="{{ url_for('delete_document', document_id=document['id']) }}" method="post" style="margin:0;">
+          <button class="danger" type="submit">Delete</button>
+        </form>
+      {% endif %}
+      <button id="themeToggle" class="theme-btn" type="button">Dark Mode</button>
+      </div>
+      <div class="badge">Permission: {{ permission }}</div>
+      <div class="panel" style="padding:12px 14px; margin-bottom:14px; background:#f8fafc;">
+        <div><strong>Title:</strong> {{ document['title'] }}</div>
+        <div><strong>Owner:</strong> {{ owner_name }}</div>
+        <div><strong>Date Created:</strong> {{ document['created_at'] }}</div>
+        <div><strong>Last Modified:</strong> {{ document['updated_at'] }}</div>
+      </div>
+      <div id="editor" class="ql-editor">{{ document['content'] | safe }}</div>
+    </div>
+
+    <aside class="panel">
+      <div class="section">
+        <h3>Presence</h3>
+        <div id="presenceList" class="presence-list">
+          {% for user in active_users %}
+          <div class="presence-item">
+            <div class="presence-row">
+              <strong>{{ user['name'] }}</strong>
+              <span class="presence-badge"><span class="presence-dot"></span>Online</span>
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+
+      <div class="section">
+        <h3>Share</h3>
+        <form action="{{ url_for('share_document', document_id=document['id']) }}" method="post" style="display:flex; flex-direction:column; gap:8px;">
+          <input type="email" name="email" placeholder="User email" required>
+          <select name="permission">
+            <option value="viewer">Viewer</option>
+            <option value="commenter">Commenter</option>
+            <option value="editor">Editor</option>
+          </select>
+          <button class="btn" type="submit">Share</button>
+        </form>
+      </div>
+
+      <div class="section">
+        <h3>Comments</h3>
+        <div id="commentList" class="comment-list">
+          {% for comment in comments %}
+          <div class="comment-item{% if comment['parent_id'] %} reply{% endif %}" data-comment-id="{{ comment['id'] }}" data-parent-id="{{ comment['parent_id'] or '' }}">
+            <div><strong>{{ comment['author_name'] }}</strong> <span class="muted">{{ comment['created_at'] }}</span></div>
+            <div>{{ comment['message'] }}</div>
+            <div class="comment-actions">
+              <button class="tiny-btn" type="button" data-action="reply" data-comment-id="{{ comment['id'] }}">Reply</button>
+              {% if comment['author_id'] == current_user['id'] or document['owner_id'] == current_user['id'] %}
+              <button class="tiny-btn success" type="button" data-action="resolve" data-comment-id="{{ comment['id'] }}">Resolve</button>
+              <button class="tiny-btn danger" type="button" data-action="delete" data-comment-id="{{ comment['id'] }}">Delete</button>
+              {% endif %}
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+        <form id="commentForm" style="display:flex; flex-direction:column; gap:8px; margin-top:10px;">
+          <input type="hidden" id="parentCommentId" value="">
+          <textarea id="commentInput" placeholder="Add comment"></textarea>
+          <button class="btn" type="submit">Post</button>
+        </form>
+      </div>
+
+      <div class="section">
+        <h3><a href="{{ url_for('document_history', document_id=document['id']) }}">Version History</a></h3>
+        <div class="revision-list">
+          {% for revision in revisions[:3] %}
+          <div class="revision-item">
+            <div><strong>{{ revision['editor_name'] }}</strong></div>
+            <div class="muted">{{ revision['created_at'] }} · {{ revision['summary'] }}</div>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <script src="https://cdn.quilljs.com/1.3.7/quill.min.js"></script>
+  <script>
+    const docId = {{ document['id'] }};
+    const permission = '{{ permission }}';
+    const quill = new Quill('#editor', {
+      theme: 'snow',
+      modules: {
+        toolbar: [
+          [{ header: [1, 2, 3, false] }],
+          ['bold', 'italic', 'underline'],
+          [{ list: 'ordered' }, { list: 'bullet' }],
+          [{ align: [] }],
+          ['link']
+        ]
+      }
+    });
+
+    const titleInput = document.getElementById('docTitleInput');
+    const titleHidden = document.getElementById('titleHidden');
+    titleInput.addEventListener('input', () => titleHidden.value = titleInput.value);
+
+    const socket = io();
+    socket.emit('join_document', { doc_id: docId });
+
+    if (permission === 'viewer') {
+      quill.enable(false);
+    }
+
+    let typingTimer = null;
+    let typingState = false;
+
+    function sendTypingState(isTyping) {
+      typingState = isTyping;
+      socket.emit('cursor_update', { doc_id: docId, typing: isTyping });
+    }
+
+    quill.on('text-change', function() {
+      if (permission === 'viewer') return;
+      const html = quill.root.innerHTML;
+      socket.emit('document_update', { doc_id: docId, content: html });
+      sendTypingState(true);
+      clearTimeout(typingTimer);
+      typingTimer = setTimeout(() => sendTypingState(false), 800);
+      fetch(`/documents/${docId}/autosave`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: html, summary: 'Live collaboration sync' })
+      });
+    });
+
+    quill.on('selection-change', function(range) {
+      if (permission === 'viewer') return;
+      if (range) {
+        socket.emit('cursor_update', {
+          doc_id: docId,
+          cursor: { index: range.index, length: range.length },
+          typing: typingState,
+        });
+      } else {
+        socket.emit('cursor_update', { doc_id: docId, cursor: null, typing: false });
+      }
+    });
+
+    socket.on('document_state', function(data) {
+      if (data.content) quill.root.innerHTML = data.content;
+    });
+
+    socket.on('document_update', function(payload) {
+      if (payload.document_id !== docId) return;
+      if (payload.user_id !== {{ current_user['id'] }}) {
+        quill.root.innerHTML = payload.content;
+      }
+    });
+
+    socket.on('presence_update', function(data) {
+      const list = document.getElementById('presenceList');
+      list.innerHTML = '';
+      if (!data.users || !data.users.length) {
+        list.innerHTML = '<div class="presence-item"><div class="muted">No users currently viewing this document.</div></div>';
+        return;
+      }
+      data.users.forEach(function(user) {
+        const item = document.createElement('div');
+        item.className = 'presence-item';
+        const isSelf = Number(user.user_id) === Number({{ current_user['id'] }});
+        let statusText = isSelf ? 'You are online' : 'Online';
+        if (user.typing) {
+          statusText = isSelf ? 'You are typing...' : 'Typing...';
+        }
+        const cursorText = user.cursor ? ' · Cursor: ' + user.cursor.index : '';
+        item.innerHTML = '<div class="presence-row"><strong>' + user.name + '</strong><span class="presence-badge"><span class="presence-dot"></span>' + statusText + cursorText + '</span></div>';
+        list.appendChild(item);
+      });
+    });
+
+    const themeToggle = document.getElementById('themeToggle');
+    if (themeToggle) {
+      const savedTheme = localStorage.getItem('syncwrite-theme');
+      if (savedTheme === 'dark') {
+        document.documentElement.classList.add('dark-mode');
+        themeToggle.textContent = 'Light Mode';
+      }
+
+      themeToggle.addEventListener('click', function() {
+        const isDark = document.documentElement.classList.toggle('dark-mode');
+        themeToggle.textContent = isDark ? 'Light Mode' : 'Dark Mode';
+        localStorage.setItem('syncwrite-theme', isDark ? 'dark' : 'light');
+      });
+    }
+
+    document.getElementById('commentForm').addEventListener('submit', function(e) {
+      e.preventDefault();
+      const message = document.getElementById('commentInput').value.trim();
+      if (!message) return;
+      const parentId = document.getElementById('parentCommentId').value || null;
+      fetch(`/documents/${docId}/comments`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: message, parent_id: parentId })
+      }).then(() => {
+        document.getElementById('commentInput').value = '';
+        document.getElementById('parentCommentId').value = '';
+        document.getElementById('commentInput').placeholder = 'Add comment';
+        location.reload();
+      });
+    });
+
+    document.addEventListener('click', function(e) {
+      const target = e.target.closest('[data-action]');
+      if (!target) return;
+      const action = target.dataset.action;
+      const commentId = Number(target.dataset.commentId);
+      if (action === 'reply') {
+        document.getElementById('parentCommentId').value = commentId;
+        document.getElementById('commentInput').focus();
+        document.getElementById('commentInput').placeholder = 'Reply to comment...';
+      }
+      if (action === 'resolve') {
+        fetch(`/documents/${docId}/comments/${commentId}/resolve`, { method: 'POST' }).then(() => location.reload());
+      }
+      if (action === 'delete') {
+        fetch(`/documents/${docId}/comments/${commentId}/delete`, { method: 'POST' }).then(() => location.reload());
+      }
+    });
+  </script>
+</body>
+</html>
