@@ -152,6 +152,8 @@
   <script>
     const docId = {{ document['id'] }};
     const permission = '{{ permission }}';
+    const currentUserId = {{ current_user['id'] }};
+    const documentOwnerId = {{ document['owner_id'] }};
     const quill = new Quill('#editor', {
       theme: 'snow',
       modules: {
@@ -178,6 +180,7 @@
 
     let typingTimer = null;
     let typingState = false;
+    let isApplyingRemoteUpdate = false;
 
     function sendTypingState(isTyping) {
       typingState = isTyping;
@@ -185,7 +188,7 @@
     }
 
     quill.on('text-change', function() {
-      if (permission === 'viewer') return;
+      if (permission === 'viewer' || isApplyingRemoteUpdate) return;
       const html = quill.root.innerHTML;
       socket.emit('document_update', { doc_id: docId, content: html });
       sendTypingState(true);
@@ -211,14 +214,28 @@
       }
     });
 
+    function applyRemoteDocumentContent(content) {
+      const currentSelection = quill.getSelection(true);
+      const currentScroll = quill.scrollingContainer.scrollTop;
+      isApplyingRemoteUpdate = true;
+      quill.setContents(quill.clipboard.convert(content), 'api');
+      if (currentSelection) {
+        quill.setSelection(currentSelection, 'api');
+      }
+      quill.scrollingContainer.scrollTop = currentScroll;
+      isApplyingRemoteUpdate = false;
+    }
+
     socket.on('document_state', function(data) {
-      if (data.content) quill.root.innerHTML = data.content;
+      if (data.content) {
+        applyRemoteDocumentContent(data.content);
+      }
     });
 
     socket.on('document_update', function(payload) {
       if (payload.document_id !== docId) return;
-      if (payload.user_id !== {{ current_user['id'] }}) {
-        quill.root.innerHTML = payload.content;
+      if (payload.user_id !== currentUserId) {
+        applyRemoteDocumentContent(payload.content);
       }
     });
 
@@ -258,6 +275,60 @@
       });
     }
 
+    function buildCommentMarkup(comment) {
+      const isReply = Boolean(comment.parent_id);
+      const canManage = Number(comment.author_id) === currentUserId || Number(documentOwnerId) === currentUserId;
+      const commentEl = document.createElement('div');
+      commentEl.className = `comment-item${isReply ? ' reply' : ''}`;
+      commentEl.dataset.commentId = comment.id;
+      commentEl.dataset.parentId = comment.parent_id || '';
+      commentEl.innerHTML = `
+        <div><strong>${comment.author_name}</strong> <span class="muted">${comment.created_at}</span></div>
+        <div>${comment.message}</div>
+        <div class="comment-actions">
+          <button class="tiny-btn" type="button" data-action="reply" data-comment-id="${comment.id}">Reply</button>
+          ${canManage ? `
+            <button class="tiny-btn success" type="button" data-action="resolve" data-comment-id="${comment.id}">Resolve</button>
+            <button class="tiny-btn danger" type="button" data-action="delete" data-comment-id="${comment.id}">Delete</button>
+          ` : ''}
+        </div>
+      `;
+      return commentEl;
+    }
+
+    function upsertComment(comment) {
+      const commentList = document.getElementById('commentList');
+      const existing = commentList.querySelector(`[data-comment-id="${comment.id}"]`);
+      if (existing) {
+        existing.replaceWith(buildCommentMarkup(comment));
+      } else {
+        commentList.appendChild(buildCommentMarkup(comment));
+      }
+    }
+
+    function removeComment(commentId) {
+      const commentList = document.getElementById('commentList');
+      const existing = commentList.querySelector(`[data-comment-id="${commentId}"]`);
+      if (existing) existing.remove();
+    }
+
+    socket.on('comment_update', function(payload) {
+      if (payload.document_id !== docId) return;
+      if (payload.action === 'resolve') {
+        const existing = document.querySelector(`#commentList [data-comment-id="${payload.comment.id}"]`);
+        if (existing) {
+          existing.querySelector('.comment-actions').innerHTML = '<span class="muted">Resolved</span>';
+        }
+        return;
+      }
+      upsertComment(payload.comment);
+    });
+
+    socket.on('comment_deleted', function(payload) {
+      if (payload.document_id !== docId) return;
+      removeComment(payload.comment_id);
+    });
+
     document.getElementById('commentForm').addEventListener('submit', function(e) {
       e.preventDefault();
       const message = document.getElementById('commentInput').value.trim();
@@ -267,11 +338,19 @@
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: message, parent_id: parentId })
-      }).then(() => {
+      }).then(async (response) => {
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(data.error || 'Unable to post comment');
+        }
         document.getElementById('commentInput').value = '';
         document.getElementById('parentCommentId').value = '';
         document.getElementById('commentInput').placeholder = 'Add comment';
-        location.reload();
+        if (data.comment) {
+          upsertComment(data.comment);
+        }
+      }).catch((error) => {
+        alert(error.message || 'Unable to post comment');
       });
     });
 
