@@ -66,12 +66,13 @@
           <button type="submit">Duplicate</button>
         </form>
         {% if document['owner_id'] == current_user['id'] %}
-        <form action="{{ url_for('delete_document', document_id=document['id']) }}" method="post" style="margin:0;">
+        <form action="{{ url_for('delete_document', document_id=document['id']) }}" method="post" style="margin:0;" onsubmit="return confirm('Are you sure you want to delete this document?');">
           <button class="danger" type="submit">Delete</button>
         </form>
       {% endif %}
       <button id="themeToggle" class="theme-btn" type="button">Dark Mode</button>
       </div>
+      <div id="saveStatus" class="muted" aria-live="polite">All changes saved.</div>
       <div class="badge">Permission: {{ permission }}</div>
       <div class="panel" style="padding:12px 14px; margin-bottom:14px; background:#f8fafc;">
         <div><strong>Title:</strong> {{ document['title'] }}</div>
@@ -169,7 +170,14 @@
 
     const titleInput = document.getElementById('docTitleInput');
     const titleHidden = document.getElementById('titleHidden');
+    const saveStatus = document.getElementById('saveStatus');
     titleInput.addEventListener('input', () => titleHidden.value = titleInput.value);
+
+    function setSaveStatus(message) {
+      if (saveStatus) {
+        saveStatus.textContent = message;
+      }
+    }
 
     const socket = io();
     socket.emit('join_document', { doc_id: docId });
@@ -190,6 +198,7 @@
     quill.on('text-change', function() {
       if (permission === 'viewer' || isApplyingRemoteUpdate) return;
       const html = quill.root.innerHTML;
+      setSaveStatus('Saving...');
       socket.emit('document_update', { doc_id: docId, content: html });
       sendTypingState(true);
       clearTimeout(typingTimer);
@@ -198,6 +207,13 @@
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ content: html, summary: 'Live collaboration sync' })
+      }).then((response) => {
+        if (!response.ok) {
+          throw new Error('Unable to save changes');
+        }
+        setSaveStatus('All changes saved.');
+      }).catch(() => {
+        setSaveStatus('Could not save changes.');
       });
     });
 

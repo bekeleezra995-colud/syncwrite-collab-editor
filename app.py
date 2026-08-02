@@ -1,5 +1,9 @@
 ﻿import os
+import secrets
+import smtplib
 import sqlite3
+from datetime import datetime, timedelta, timezone
+from email.message import EmailMessage
 from functools import wraps
 
 from flask import Flask, abort, jsonify, redirect, render_template, request, session, url_for
@@ -81,6 +85,15 @@ def init_db():
             FOREIGN KEY(author_id) REFERENCES users(id) ON DELETE CASCADE,
             FOREIGN KEY(parent_id) REFERENCES comments(id) ON DELETE CASCADE
         );
+
+        CREATE TABLE IF NOT EXISTS password_reset_tokens (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            email TEXT NOT NULL,
+            token TEXT UNIQUE NOT NULL,
+            expires_at TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(email) REFERENCES users(email) ON DELETE CASCADE
+        );
         """
     )
     conn.commit()
@@ -147,6 +160,11 @@ def get_document_permission(document_id, user_id):
     row = conn.execute('SELECT permission FROM document_permissions WHERE document_id = ? AND user_id = ?', (document_id, user_id)).fetchone()
     conn.close()
     return row['permission'] if row else None
+
+
+def can_view_document(document_id, user_id):
+    permission = get_document_permission(document_id, user_id)
+    return permission in ('owner', 'viewer', 'commenter', 'editor')
 
 
 def can_edit_document(document_id, user_id):
@@ -220,6 +238,48 @@ def is_strong_password(password):
     return bool(re.compile(r'^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*()_+\-=[\]{};\':"\\|,.<>/?~`])[A-Za-z\d!@#$%^&*()_+\-=[\]{};\':"\\|,.<>/?~`]{8,}$').fullmatch(password))
 
 
+def is_valid_email(email):
+    import re
+    if not isinstance(email, str):
+        return False
+    return bool(re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').fullmatch(email.strip()))
+
+
+def send_password_reset_email(email, token):
+    smtp_host = os.environ.get('SMTP_HOST')
+    smtp_port = int(os.environ.get('SMTP_PORT', '465'))
+    sender = os.environ.get('SMTP_SENDER')
+    username = os.environ.get('SMTP_USERNAME')
+    password = os.environ.get('SMTP_PASSWORD')
+
+    if not all([smtp_host, sender, username, password]):
+        return False
+
+    reset_url = url_for('reset_password', token=token, _external=True)
+    message = EmailMessage()
+    message['Subject'] = 'SyncWrite Password Reset'
+    message['From'] = sender
+    message['To'] = email
+    message.set_content(
+        'Use the following link to reset your SyncWrite password:\n\n'
+        f'{reset_url}\n\n'
+        'If you did not request this, you can ignore this email.'
+    )
+
+    try:
+        if smtp_port == 587:
+            server = smtplib.SMTP(smtp_host, smtp_port)
+            server.starttls()
+        else:
+            server = smtplib.SMTP_SSL(smtp_host, smtp_port)
+        server.login(username, password)
+        server.send_message(message)
+        server.quit()
+        return True
+    except Exception:
+        return False
+
+
 def get_presence_for_document(document_id):
     users = PRESENCE.get(str(document_id), {})
     return [
@@ -270,9 +330,20 @@ def register():
         name = request.form.get('name', '').strip()
         email = request.form.get('email', '').strip().lower()
         password = request.form.get('password', '')
+        confirm_password = request.form.get('confirm_password', '')
 
-        if not name or not email or not password:
-            return render_template('index.html', error='Please complete all fields.', show_register=True)
+        if not name:
+            return render_template('index.html', error='Name is required.', show_register=True)
+        if len(name) < 3:
+            return render_template('index.html', error='Name must contain at least 3 characters.', show_register=True)
+        if not email:
+            return render_template('index.html', error='Email is required.', show_register=True)
+        if not is_valid_email(email):
+            return render_template('index.html', error='Please enter a valid email address.', show_register=True)
+        if not password:
+            return render_template('index.html', error='Password is required.', show_register=True)
+        if confirm_password and password != confirm_password:
+            return render_template('index.html', error='Passwords do not match.', show_register=True)
         if not is_strong_password(password):
             return render_template('index.html', error='Password must include uppercase, lowercase, number and special character.', show_register=True)
         if get_user_by_email(email):
@@ -307,6 +378,89 @@ def login():
 def logout():
     session.clear()
     return redirect(url_for('login'))
+
+
+@app.route('/forgot-password', methods=['GET', 'POST'])
+def forgot_password():
+    if request.method == 'POST':
+        email = request.form.get('email', '').strip().lower()
+        user = get_user_by_email(email)
+        if not user:
+            return render_template('index.html', error='User not found.', show_register=False, show_forgot_password=True)
+
+        token = secrets.token_urlsafe(24)
+        expires_at = (datetime.now(timezone.utc) + timedelta(minutes=30)).isoformat()
+
+        conn = get_db()
+        conn.execute('DELETE FROM password_reset_tokens WHERE email = ?', (email,))
+        conn.execute(
+            'INSERT INTO password_reset_tokens (email, token, expires_at) VALUES (?, ?, ?)',
+            (email, token, expires_at),
+        )
+        conn.commit()
+        conn.close()
+
+        email_sent = send_password_reset_email(email, token)
+        if email_sent:
+            return render_template(
+                'index.html',
+                message='Password reset link sent to your email.',
+                show_register=False,
+                show_forgot_password=True,
+            )
+
+        return render_template(
+            'index.html',
+            message=f'Password reset link generated. Use the token: {token} (demo mode).',
+            show_register=False,
+            show_forgot_password=True,
+        )
+
+    return render_template('index.html', show_register=False, show_forgot_password=True)
+
+
+@app.route('/reset-password/<token>', methods=['GET', 'POST'])
+def reset_password(token):
+    conn = get_db()
+    row = conn.execute('SELECT * FROM password_reset_tokens WHERE token = ?', (token,)).fetchone()
+    if not row:
+        conn.close()
+        return render_template('index.html', error='Invalid or expired password reset token.', show_register=False, show_forgot_password=True)
+
+    expires_at = datetime.fromisoformat(row['expires_at'])
+    if datetime.now(timezone.utc) > expires_at:
+        conn.execute('DELETE FROM password_reset_tokens WHERE token = ?', (token,))
+        conn.commit()
+        conn.close()
+        return render_template('index.html', error='Password reset token has expired.', show_register=False, show_forgot_password=True)
+
+    if request.method == 'POST':
+        password = request.form.get('password', '')
+        confirm_password = request.form.get('confirm_password', '')
+
+        if not password:
+            conn.close()
+            return render_template('index.html', error='Password is required.', show_register=False, show_forgot_password=True)
+        if password != confirm_password:
+            conn.close()
+            return render_template('index.html', error='Passwords do not match.', show_register=False, show_forgot_password=True)
+        if not is_strong_password(password):
+            conn.close()
+            return render_template('index.html', error='Password must include uppercase, lowercase, number and special character.', show_register=False, show_forgot_password=True)
+
+        conn.execute('UPDATE users SET password = ? WHERE email = ?', (generate_password_hash(password), row['email']))
+        conn.execute('DELETE FROM password_reset_tokens WHERE token = ?', (token,))
+        conn.commit()
+        conn.close()
+        return render_template('index.html', message='Password updated successfully. Please login with your new password.', show_register=False)
+
+    conn.close()
+    return render_template(
+        'index.html',
+        show_register=False,
+        show_forgot_password=True,
+        reset_token=token,
+    )
 
 
 @app.route('/dashboard')
@@ -393,7 +547,13 @@ def rename_document(document_id):
         abort(404)
     if not can_edit_document(document_id, current_user()['id']):
         abort(403)
-    new_title = request.form.get('title', '').strip() or doc['title']
+
+    new_title = request.form.get('title', '').strip()
+    if not new_title:
+        abort(400)
+    if len(new_title) > 255:
+        abort(400)
+
     conn = get_db(); conn.execute('UPDATE documents SET title = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', (new_title, document_id)); conn.commit(); conn.close()
     return redirect(url_for('document_detail', document_id=document_id))
 
@@ -406,7 +566,12 @@ def duplicate_document(document_id):
         abort(404)
     if not can_edit_document(document_id, current_user()['id']):
         abort(403)
-    conn = get_db(); cursor = conn.execute('INSERT INTO documents (title, owner_id, content, created_at, updated_at, last_opened_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)', (f'{doc["title"]} Copy', current_user()['id'], doc['content'])); new_id = cursor.lastrowid; conn.commit(); conn.close(); create_document_snapshot(new_id, current_user()['id'], doc['content'], 'Duplicated document'); return redirect(url_for('document_detail', document_id=new_id))
+
+    copied_title = f'{doc["title"]} (Copy)'
+    if len(copied_title) > 255:
+        copied_title = f'{doc["title"][:252]} (Copy)'
+
+    conn = get_db(); cursor = conn.execute('INSERT INTO documents (title, owner_id, content, created_at, updated_at, last_opened_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)', (copied_title, current_user()['id'], doc['content'])); new_id = cursor.lastrowid; conn.commit(); conn.close(); create_document_snapshot(new_id, current_user()['id'], doc['content'], 'Duplicated document'); return redirect(url_for('document_detail', document_id=new_id))
 
 
 @app.route('/documents/<int:document_id>/delete', methods=['POST'])
@@ -531,7 +696,12 @@ def restore_revision(document_id, revision_id):
     conn = get_db(); revision = conn.execute('SELECT * FROM revisions WHERE id = ? AND document_id = ?', (revision_id, document_id)).fetchone();
     if not revision:
         conn.close(); abort(404)
-    conn.execute('UPDATE documents SET content = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', (revision['content'], document_id)); conn.commit(); conn.close(); socketio.emit('document_update', {'document_id': document_id, 'content': revision['content']}, room=f'document_{document_id}'); return redirect(url_for('document_history', document_id=document_id))
+
+    create_document_snapshot(document_id, current_user()['id'], revision['content'], f'Restored revision {revision["revision_number"]}')
+    conn.execute('UPDATE documents SET content = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', (revision['content'], document_id))
+    conn.commit(); conn.close()
+    socketio.emit('document_update', {'document_id': document_id, 'content': revision['content']}, room=f'document_{document_id}')
+    return redirect(url_for('document_history', document_id=document_id))
 
 
 @socketio.on('join_document')
@@ -540,6 +710,8 @@ def handle_join_document(payload):
     if not user:
         return
     document_id = int(payload.get('doc_id'))
+    if not can_view_document(document_id, user['id']):
+        return
     room = f'document_{document_id}'
     join_room(room)
     update_presence(document_id, user['id'], user['name'], request.sid)
@@ -555,6 +727,8 @@ def handle_cursor_update(payload):
     if not user:
         return
     document_id = int(payload.get('doc_id'))
+    if not can_view_document(document_id, user['id']):
+        return
     update_presence(document_id, user['id'], user['name'], request.sid, payload.get('cursor'), payload.get('typing'))
     emit('presence_update', {'users': get_presence_for_document(document_id)}, room=f'document_{document_id}')
 

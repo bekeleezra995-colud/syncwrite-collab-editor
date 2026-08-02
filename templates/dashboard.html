@@ -12,6 +12,8 @@
     .container { max-width:1120px; margin:24px auto; padding:0 18px; }
     .panel { background:white; border-radius:14px; padding:20px; box-shadow:0 6px 12px rgba(0,0,0,.08); margin-bottom:20px; }
     .create-row { display:flex; gap:12px; }
+    .user-summary { display:flex; flex-wrap:wrap; gap:12px; align-items:center; justify-content:space-between; margin-bottom:16px; }
+    .user-badge { background:#eff6ff; color:#1d4ed8; padding:8px 12px; border-radius:999px; font-size:.9rem; }
     input { flex:1; padding:10px; border:1px solid #d1d5db; border-radius:10px; }
     button { background:#2563eb; color:#fff; border:none; border-radius:10px; padding:10px 12px; cursor:pointer; }
     .grid { display:grid; grid-template-columns:1fr 1fr; gap:18px; }
@@ -26,10 +28,16 @@
   </div>
   <div class="container">
     <div class="panel">
-      <h2>Welcome, {{ user['name'] }}</h2>
+      <div class="user-summary">
+        <div>
+          <h2>Welcome, {{ user['name'] }}</h2>
+          <div class="user-badge">Signed in as {{ user['email'] }}</div>
+        </div>
+        <div class="user-badge">Account created: {{ user['created_at'] }}</div>
+      </div>
       <form class="create-row" method="post" action="{{ url_for('create_document') }}">
         <input type="text" name="title" placeholder="New document title" required>
-        <button type="submit">Create Document</button>
+        <button type="submit">Create New Document</button>
       </form>
       <form method="get" action="{{ url_for('dashboard') }}" style="margin-top:16px; display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
         <input type="search" name="q" placeholder="Search documents" value="{{ search_query or '' }}" style="flex:1; padding:10px; border:1px solid #d1d5db; border-radius:10px;">
