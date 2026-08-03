@@ -651,8 +651,6 @@ def resolve_comment(document_id, comment_id):
     comment = conn.execute('SELECT c.*, u.name AS author_name FROM comments c JOIN users u ON u.id = c.author_id WHERE c.id = ? AND c.document_id = ?', (comment_id, document_id)).fetchone()
     if not comment:
         conn.close(); abort(404)
-    if comment['author_id'] != current_user()['id'] and get_document(document_id)['owner_id'] != current_user()['id']:
-        conn.close(); abort(403)
     conn.execute('UPDATE comments SET resolved = 1 WHERE id = ? AND document_id = ?', (comment_id, document_id))
     updated = conn.execute('SELECT c.*, u.name AS author_name FROM comments c JOIN users u ON u.id = c.author_id WHERE c.id = ?', (comment_id,)).fetchone()
     conn.commit(); conn.close()
