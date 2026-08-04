@@ -20,8 +20,6 @@
     .toolbar form { display:flex; gap:8px; margin:0; flex-wrap:wrap; }
     .toolbar .danger { background:#ef4444; }
     .toolbar .theme-btn { background:#475569; }
-    .sidebar-toggle { display:none; }
-    .mobile-menu-shell { position:relative; }
     .badge { display:inline-block; background:#dbeafe; color:#1d4ed8; border-radius:999px; padding:6px 10px; margin-bottom:12px; }
     .dark-mode body, .dark-mode html { background:#0f172a; color:#e2e8f0; }
     .dark-mode .topbar { background:#111827; }
@@ -36,6 +34,8 @@
     .dark-mode .comment-item,
     .dark-mode .revision-item { background:#111827; border-color:#1f2937; }
     .ql-container { height:560px; }
+    .ql-toolbar { flex-wrap:wrap !important; }
+    .ql-editor { min-height:360px; overflow-wrap:anywhere; word-break:break-word; }
     .section { margin-top:20px; }
     .presence-list, .comment-list, .revision-list { display:flex; flex-direction:column; gap:10px; }
     .presence-item, .comment-item, .revision-item { border:1px solid #e5e7eb; border-radius:10px; padding:10px; }
@@ -57,34 +57,14 @@
     .muted { color:#6b7280; font-size:.85rem; }
 
     @media (max-width: 900px) {
-      .workspace { grid-template-columns:1fr; padding:0 12px; gap:12px; }
-      .sidebar-panel { display:none; }
-      .sidebar-panel.is-open {
-        display:block;
-        position:relative;
-        right:auto;
-        left:auto;
-        top:auto;
-        bottom:auto;
-        max-height:none;
-        overflow:auto;
-        z-index:auto;
-        border:1px solid #e5e7eb;
-        box-shadow:none;
-        margin-top:12px;
+      .workspace {
+        grid-template-columns:minmax(320px, 1fr) minmax(280px, 320px);
+        padding:0 12px;
+        gap:12px;
+        overflow-x:auto;
       }
-      .sidebar-toggle {
-        display:inline-flex;
-        position:static;
-        right:auto;
-        top:auto;
-        bottom:auto;
-        z-index:auto;
-        border-radius:8px;
-        padding:10px 12px;
-        box-shadow:none;
-        margin-left:auto;
-      }
+      .panel { width:100%; overflow-x:auto; }
+      .sidebar-panel { display:block; margin-top:0; }
     }
 
     @media (max-width: 640px) {
@@ -99,7 +79,9 @@
       .toolbar form { display:flex; flex-direction:column; }
       .toolbar form button { width:100%; }
       .panel { padding:14px; }
+      .workspace { grid-template-columns:minmax(320px, 1fr) minmax(280px, 320px); }
       .ql-container { height:auto; min-height:320px; }
+      .ql-editor { min-height:280px; }
       .comment-meta { flex-direction:column; align-items:flex-start; }
       .presence-row { flex-direction:column; align-items:flex-start; }
     }
@@ -124,9 +106,6 @@
     <div class="panel print-panel">
       <div class="toolbar">
         <input id="docTitleInput" type="text" value="{{ document['title'] }}">
-        <div class="mobile-menu-shell">
-          <button id="sidebarToggle" class="theme-btn sidebar-toggle" type="button" aria-controls="sidebarPanel" aria-expanded="false">☰ Menu</button>
-        </div>
         <form action="{{ url_for('rename_document', document_id=document['id']) }}" method="post" style="display:flex; gap:8px; margin:0;">
           <input type="hidden" name="title" id="titleHidden" value="{{ document['title'] }}">
           <button type="submit">Rename</button>
@@ -460,16 +439,6 @@
         alert(error.message || 'Unable to post comment');
       });
     });
-
-    const sidebarToggle = document.getElementById('sidebarToggle');
-    const sidebarPanel = document.getElementById('sidebarPanel');
-    if (sidebarToggle && sidebarPanel) {
-      sidebarToggle.addEventListener('click', function() {
-        const isOpen = sidebarPanel.classList.toggle('is-open');
-        sidebarToggle.setAttribute('aria-expanded', String(isOpen));
-        sidebarToggle.textContent = isOpen ? '✕ Close' : '☰ Menu';
-      });
-    }
 
     const exportPdfBtn = document.getElementById('exportPdfBtn');
     if (exportPdfBtn) {
