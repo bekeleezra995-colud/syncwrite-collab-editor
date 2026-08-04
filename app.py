@@ -10,6 +10,15 @@ from flask import Flask, abort, jsonify, redirect, render_template, request, ses
 from flask_socketio import SocketIO, emit, join_room
 from werkzeug.security import check_password_hash, generate_password_hash
 
+from services.document_service import (
+    can_comment,
+    can_edit,
+    can_view,
+    get_permission,
+    validate_content,
+    validate_title,
+)
+
 app = Flask(__name__)
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "syncwrite-dev-secret")
 app.config["SESSION_COOKIE_HTTPONLY"] = True
@@ -151,30 +160,19 @@ def get_document(document_id):
 
 
 def get_document_permission(document_id, user_id):
-    doc = get_document(document_id)
-    if not doc:
-        return None
-    if doc['owner_id'] == user_id:
-        return 'owner'
-    conn = get_db()
-    row = conn.execute('SELECT permission FROM document_permissions WHERE document_id = ? AND user_id = ?', (document_id, user_id)).fetchone()
-    conn.close()
-    return row['permission'] if row else None
+    return get_permission(document_id, user_id)
 
 
 def can_view_document(document_id, user_id):
-    permission = get_document_permission(document_id, user_id)
-    return permission in ('owner', 'viewer', 'commenter', 'editor')
+    return can_view(document_id, user_id)
 
 
 def can_edit_document(document_id, user_id):
-    permission = get_document_permission(document_id, user_id)
-    return permission in ('owner', 'editor')
+    return can_edit(document_id, user_id)
 
 
 def can_comment_document(document_id, user_id):
-    permission = get_document_permission(document_id, user_id)
-    return permission in ('owner', 'editor', 'commenter')
+    return can_comment(document_id, user_id)
 
 
 def create_document_snapshot(document_id, created_by_user_id, content, summary='Autosave'):
@@ -315,6 +313,16 @@ def initials(name):
     if len(parts) == 1:
         return parts[0][:2].upper()
     return (parts[0][0] + parts[-1][0]).upper()
+
+
+def get_notification():
+    notification = session.pop('notification', None)
+    return notification
+
+
+@app.context_processor
+def inject_notification():
+    return {'notification_message': get_notification()}
 
 
 @app.route('/')
@@ -560,12 +568,12 @@ def rename_document(document_id):
         abort(403)
 
     new_title = request.form.get('title', '').strip()
-    if not new_title:
-        abort(400)
-    if len(new_title) > 255:
-        abort(400)
+    is_valid, error = validate_title(new_title)
+    if not is_valid:
+        return jsonify({'error': error}), 400
 
     conn = get_db(); conn.execute('UPDATE documents SET title = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', (new_title, document_id)); conn.commit(); conn.close()
+    session['notification'] = 'Document renamed successfully.'
     return redirect(url_for('document_detail', document_id=document_id))
 
 
@@ -582,7 +590,7 @@ def duplicate_document(document_id):
     if len(copied_title) > 255:
         copied_title = f'{doc["title"][:252]} (Copy)'
 
-    conn = get_db(); cursor = conn.execute('INSERT INTO documents (title, owner_id, content, created_at, updated_at, last_opened_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)', (copied_title, current_user()['id'], doc['content'])); new_id = cursor.lastrowid; conn.commit(); conn.close(); create_document_snapshot(new_id, current_user()['id'], doc['content'], 'Duplicated document'); return redirect(url_for('document_detail', document_id=new_id))
+    conn = get_db(); cursor = conn.execute('INSERT INTO documents (title, owner_id, content, created_at, updated_at, last_opened_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)', (copied_title, current_user()['id'], doc['content'])); new_id = cursor.lastrowid; conn.commit(); conn.close(); create_document_snapshot(new_id, current_user()['id'], doc['content'], 'Duplicated document'); session['notification'] = 'Document duplicated successfully.'; return redirect(url_for('document_detail', document_id=new_id))
 
 
 @app.route('/documents/<int:document_id>/delete', methods=['POST'])
@@ -593,7 +601,7 @@ def delete_document(document_id):
         abort(404)
     if doc['owner_id'] != current_user()['id']:
         abort(403)
-    conn = get_db(); conn.execute('DELETE FROM documents WHERE id = ?', (document_id,)); conn.commit(); conn.close(); return redirect(url_for('dashboard'))
+    conn = get_db(); conn.execute('DELETE FROM documents WHERE id = ?', (document_id,)); conn.commit(); conn.close(); session['notification'] = 'Document deleted.'; return redirect(url_for('dashboard'))
 
 
 @app.route('/documents/<int:document_id>/share', methods=['POST'])
@@ -613,7 +621,7 @@ def share_document(document_id):
     if not target:
         return redirect(url_for('document_detail', document_id=document_id))
 
-    conn = get_db(); conn.execute('INSERT INTO document_permissions (document_id, user_id, permission) VALUES (?, ?, ?) ON CONFLICT(document_id, user_id) DO UPDATE SET permission = excluded.permission', (document_id, target['id'], permission)); conn.commit(); conn.close(); return redirect(url_for('document_detail', document_id=document_id))
+    conn = get_db(); conn.execute('INSERT INTO document_permissions (document_id, user_id, permission) VALUES (?, ?, ?) ON CONFLICT(document_id, user_id) DO UPDATE SET permission = excluded.permission', (document_id, target['id'], permission)); conn.commit(); conn.close(); session['notification'] = f'User shared with {email}.'; return redirect(url_for('document_detail', document_id=document_id))
 
 
 @app.route('/documents/<int:document_id>/autosave', methods=['POST'])
@@ -623,6 +631,9 @@ def autosave_document(document_id):
         abort(403)
     payload = request.get_json(silent=True) or {}
     content = payload.get('content', '')
+    is_valid, error = validate_content(content)
+    if not is_valid:
+        return jsonify({'error': error}), 400
     save_document_content(document_id, content, current_user()['id'], 'Autosave')
     return jsonify({'status': 'saved'})
 
@@ -637,6 +648,8 @@ def add_comment(document_id):
     parent_id = payload.get('parent_id')
     if not message:
         return jsonify({'error': 'Comment cannot be empty.'}), 400
+    if parent_id is not None and not str(parent_id).isdigit():
+        return jsonify({'error': 'Invalid parent comment id.'}), 400
 
     conn = get_db()
     if parent_id:

@@ -11,6 +11,7 @@
     .topbar a { color:#fff; text-decoration:none; }
     .container { max-width:1120px; margin:24px auto; padding:0 18px; }
     .panel { background:white; border-radius:14px; padding:20px; box-shadow:0 6px 12px rgba(0,0,0,.08); margin-bottom:20px; }
+    .notice { background:#eff6ff; color:#1d4ed8; border:1px solid #bfdbfe; border-radius:10px; padding:12px 14px; margin-bottom:16px; }
     .create-row { display:flex; gap:12px; }
     .user-summary { display:flex; flex-wrap:wrap; gap:12px; align-items:center; justify-content:space-between; margin-bottom:16px; }
     .user-badge { background:#eff6ff; color:#1d4ed8; padding:8px 12px; border-radius:999px; font-size:.9rem; }
@@ -19,6 +20,8 @@
     .grid { display:grid; grid-template-columns:1fr 1fr; gap:18px; }
     .item { border:1px solid #e5e7eb; border-radius:10px; padding:12px 14px; margin-top:10px; }
     .meta { color:#6b7280; font-size:.9rem; }
+    .avatar { width:40px; height:40px; border-radius:50%; display:inline-flex; align-items:center; justify-content:center; font-weight:700; color:white; background:linear-gradient(135deg,#2563eb,#7c3aed); flex-shrink:0; }
+    .user-row { display:flex; align-items:center; gap:10px; }
   </style>
 </head>
 <body>
@@ -27,11 +30,17 @@
     <a href="{{ url_for('logout') }}">Logout</a>
   </div>
   <div class="container">
+    {% if notification_message %}
+    <div class="notice">{{ notification_message }}</div>
+    {% endif %}
     <div class="panel">
       <div class="user-summary">
-        <div>
-          <h2>Welcome, {{ user['name'] }}</h2>
-          <div class="user-badge">Signed in as {{ user['email'] }}</div>
+        <div class="user-row">
+          <div class="avatar" aria-label="{{ user['name'] }} avatar">{{ initials(user['name']) }}</div>
+          <div>
+            <h2>Welcome, {{ user['name'] }}</h2>
+            <div class="user-badge">Signed in as {{ user['email'] }}</div>
+          </div>
         </div>
         <div class="user-badge">Account created: {{ user['created_at'] }}</div>
       </div>

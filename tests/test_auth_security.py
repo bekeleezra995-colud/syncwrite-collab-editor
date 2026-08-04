@@ -24,6 +24,17 @@ class AppIntegrationTests(unittest.TestCase):
     def login(self, email, password):
         return self.client.post('/login', data={'email': email, 'password': password}, follow_redirects=True)
 
+    def test_notification_banner_is_rendered_once(self):
+        self.register('Owner', 'owner-notify@example.com', 'StrongPass1!')
+        self.login('owner-notify@example.com', 'StrongPass1!')
+
+        with self.client.session_transaction() as session:
+            session['notification'] = 'Document renamed successfully.'
+
+        response = self.client.get('/dashboard')
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b'Document renamed successfully.', response.data)
+
     def test_registration_and_login(self):
         response = self.register('Test User', 'test@example.com', 'StrongPass1!')
         self.assertIn(b'Login', response.data)
@@ -63,6 +74,32 @@ class AppIntegrationTests(unittest.TestCase):
 
         allowed_response = self.client.post(f'/documents/{document_id}/autosave', json={'content': '<p>owner save</p>'})
         self.assertEqual(allowed_response.status_code, 200)
+
+    def test_rename_document_rejects_invalid_title(self):
+        self.register('Owner', 'owner9@example.com', 'StrongPass1!')
+        self.login('owner9@example.com', 'StrongPass1!')
+        self.client.post('/documents/new', data={'title': 'Title Check'}, follow_redirects=True)
+
+        conn = get_db()
+        doc = conn.execute('SELECT id FROM documents WHERE title = ?', ('Title Check',)).fetchone()
+        conn.close()
+
+        response = self.client.post(f'/documents/{doc["id"]}/rename', data={'title': ''}, follow_redirects=True)
+        self.assertEqual(response.status_code, 400)
+
+    def test_autosave_rejects_oversized_content(self):
+        self.register('Owner', 'owner10@example.com', 'StrongPass1!')
+        self.login('owner10@example.com', 'StrongPass1!')
+        self.client.post('/documents/new', data={'title': 'Oversize Doc'}, follow_redirects=True)
+
+        conn = get_db()
+        doc = conn.execute('SELECT id FROM documents WHERE title = ?', ('Oversize Doc',)).fetchone()
+        conn.close()
+
+        oversized_content = '<p>' + ('x' * 200001) + '</p>'
+        response = self.client.post(f'/documents/{doc["id"]}/autosave', json={'content': oversized_content})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn(b'Content is too large', response.data)
 
     def test_forgot_password_flow_supports_password_reset(self):
         self.register('Owner', 'owner2@example.com', 'StrongPass1!')

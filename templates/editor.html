@@ -21,6 +21,7 @@
     .toolbar .danger { background:#ef4444; }
     .toolbar .theme-btn { background:#475569; }
     .badge { display:inline-block; background:#dbeafe; color:#1d4ed8; border-radius:999px; padding:6px 10px; margin-bottom:12px; }
+    .notice { background:#eff6ff; color:#1d4ed8; border:1px solid #bfdbfe; border-radius:10px; padding:12px 14px; margin-bottom:12px; }
     .dark-mode body, .dark-mode html { background:#0f172a; color:#e2e8f0; }
     .dark-mode .topbar { background:#111827; }
     .dark-mode .panel { background:#111827; color:#e2e8f0; }
@@ -39,6 +40,8 @@
     .section { margin-top:20px; }
     .presence-list, .comment-list, .revision-list { display:flex; flex-direction:column; gap:10px; }
     .presence-item, .comment-item, .revision-item { border:1px solid #e5e7eb; border-radius:10px; padding:10px; }
+    .avatar { width:40px; height:40px; border-radius:50%; display:inline-flex; align-items:center; justify-content:center; font-weight:700; color:white; background:linear-gradient(135deg,#2563eb,#7c3aed); flex-shrink:0; }
+    .presence-user { display:flex; align-items:center; gap:10px; }
     .comment-item { background:#fafafa; }
     .comment-item.reply { margin-left:18px; border-left:3px solid #bfdbfe; }
     .comment-item.resolved { border-color:#86efac; background:#f0fdf4; }
@@ -103,6 +106,9 @@
   </div>
 
   <div class="workspace">
+    {% if notification_message %}
+    <div class="notice" style="grid-column:1 / -1;">{{ notification_message }}</div>
+    {% endif %}
     <div class="panel print-panel">
       <div class="toolbar">
         <input id="docTitleInput" type="text" value="{{ document['title'] }}">
@@ -119,6 +125,9 @@
         </form>
       {% endif %}
       <button id="exportPdfBtn" class="theme-btn" type="button">Export PDF</button>
+      <button id="exportMarkdownBtn" class="theme-btn" type="button">Export Markdown</button>
+      <button id="importMarkdownBtn" class="theme-btn" type="button">Import Markdown</button>
+      <input id="markdownFileInput" type="file" accept=".md,.markdown,.txt" style="display:none;">
       <button id="themeToggle" class="theme-btn" type="button">Dark Mode</button>
       </div>
       <div id="saveStatus" class="muted" aria-live="polite">All changes saved.</div>
@@ -140,7 +149,10 @@
           {% for user in active_users %}
           <div class="presence-item">
             <div class="presence-row">
-              <strong>{{ user['name'] }}</strong>
+              <div class="presence-user">
+                <div class="avatar" aria-label="{{ user['name'] }} avatar">{{ initials(user['name']) }}</div>
+                <strong>{{ user['name'] }}</strong>
+              </div>
               <span class="presence-badge"><span class="presence-dot"></span>{% if user['user_id'] == current_user['id'] %}You are online{% else %}Online{% endif %}</span>
             </div>
           </div>
@@ -343,8 +355,10 @@
         if (user.typing) {
           statusText = isSelf ? 'You are typing...' : 'Typing...';
         }
-        const cursorText = user.cursor ? ' · Cursor: ' + user.cursor.index : '';
-        item.innerHTML = '<div class="presence-row"><strong>' + user.name + '</strong><span class="presence-badge"><span class="presence-dot"></span>' + statusText + cursorText + '</span></div>';
+        const cursorText = user.cursor ? ' · Location: ' + user.cursor.index : '';
+        const initials = (user.name || '').split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join('').toUpperCase() || '?';
+        const locationText = user.cursor ? ' · Editing at ' + user.cursor.index : '';
+        item.innerHTML = '<div class="presence-row"><div class="presence-user"><div class="avatar" aria-label="' + user.name + ' avatar">' + initials + '</div><strong>' + user.name + '</strong></div><span class="presence-badge"><span class="presence-dot"></span>' + statusText + locationText + '</span></div>';
         list.appendChild(item);
       });
     });
@@ -440,10 +454,225 @@
       });
     });
 
+    function escapeHtml(value) {
+      return String(value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/\"/g, '&quot;');
+    }
+
+    function formatInlineMarkdown(text) {
+      let output = escapeHtml(text || '');
+      output = output.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+      output = output.replace(/__(.+?)__/g, '<strong>$1</strong>');
+      output = output.replace(/\*(.+?)\*/g, '<em>$1</em>');
+      output = output.replace(/~~(.+?)~~/g, '<del>$1</del>');
+      output = output.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+      return output;
+    }
+
+    function markdownToHtml(markdown) {
+      const lines = String(markdown || '').replace(/\r\n/g, '\n').split('\n');
+      let html = '';
+      let inList = false;
+      let listType = '';
+
+      function closeList() {
+        if (inList) {
+          html += `</${listType}>`;
+          inList = false;
+          listType = '';
+        }
+      }
+
+      lines.forEach((line) => {
+        const trimmed = line.trim();
+        if (!trimmed) {
+          closeList();
+          html += '<p><br></p>';
+          return;
+        }
+
+        const headingMatch = trimmed.match(/^(#{1,6})\s+(.*)$/);
+        if (headingMatch) {
+          closeList();
+          const level = headingMatch[1].length;
+          html += `<h${level}>${formatInlineMarkdown(headingMatch[2])}</h${level}>`;
+          return;
+        }
+
+        if (/^>\s+/.test(trimmed)) {
+          closeList();
+          html += `<blockquote>${formatInlineMarkdown(trimmed.replace(/^>\s+/, ''))}</blockquote>`;
+          return;
+        }
+
+        if (/^[-*]\s+/.test(trimmed)) {
+          if (!inList || listType !== 'ul') {
+            closeList();
+            html += '<ul>';
+            inList = true;
+            listType = 'ul';
+          }
+          html += `<li>${formatInlineMarkdown(trimmed.replace(/^[-*]\s+/, ''))}</li>`;
+          return;
+        }
+
+        if (/^\d+\.\s+/.test(trimmed)) {
+          if (!inList || listType !== 'ol') {
+            closeList();
+            html += '<ol>';
+            inList = true;
+            listType = 'ol';
+          }
+          html += `<li>${formatInlineMarkdown(trimmed.replace(/^\d+\.\s+/, ''))}</li>`;
+          return;
+        }
+
+        closeList();
+        html += `<p>${formatInlineMarkdown(trimmed)}</p>`;
+      });
+
+      closeList();
+      return html || '<p><br></p>';
+    }
+
+    function htmlToMarkdown(html) {
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(html || '<p></p>', 'text/html');
+      const lines = [];
+      const nodes = Array.from(doc.body.childNodes);
+
+      function serializeInline(node) {
+        if (!node) return '';
+        if (node.nodeType === Node.TEXT_NODE) {
+          return node.textContent || '';
+        }
+        if (node.nodeType !== Node.ELEMENT_NODE) {
+          return '';
+        }
+
+        const tag = node.tagName.toLowerCase();
+        const text = Array.from(node.childNodes).map((child) => serializeInline(child)).join('');
+        if (tag === 'strong' || tag === 'b') {
+          return `**${text}**`;
+        }
+        if (tag === 'em' || tag === 'i') {
+          return `*${text}*`;
+        }
+        if (tag === 'del' || tag === 's') {
+          return `~~${text}~~`;
+        }
+        if (tag === 'a') {
+          return `[${text}](${node.getAttribute('href') || ''})`;
+        }
+        if (tag === 'br') {
+          return '\n';
+        }
+        return text;
+      }
+
+      function addBlock(block) {
+        if (block) {
+          lines.push(block);
+        }
+      }
+
+      nodes.forEach((node) => {
+        const tag = node.nodeType === Node.ELEMENT_NODE ? node.tagName.toLowerCase() : '';
+        if (!tag) {
+          const text = (node.textContent || '').trim();
+          if (text) {
+            addBlock(text);
+          }
+          return;
+        }
+
+        if (tag === 'p') {
+          addBlock(serializeInline(node).trim());
+          return;
+        }
+        if (tag === 'h1') addBlock(`# ${serializeInline(node).trim()}`);
+        else if (tag === 'h2') addBlock(`## ${serializeInline(node).trim()}`);
+        else if (tag === 'h3') addBlock(`### ${serializeInline(node).trim()}`);
+        else if (tag === 'h4') addBlock(`#### ${serializeInline(node).trim()}`);
+        else if (tag === 'h5') addBlock(`##### ${serializeInline(node).trim()}`);
+        else if (tag === 'h6') addBlock(`###### ${serializeInline(node).trim()}`);
+        else if (tag === 'blockquote') addBlock(`> ${serializeInline(node).trim()}`);
+        else if (tag === 'ul') {
+          Array.from(node.children).forEach((item) => {
+            addBlock(`- ${serializeInline(item).trim()}`);
+          });
+        } else if (tag === 'ol') {
+          Array.from(node.children).forEach((item, index) => {
+            addBlock(`${index + 1}. ${serializeInline(item).trim()}`);
+          });
+        }
+      });
+
+      return lines.join('\n');
+    }
+
+    function saveEditorContent() {
+      const html = quill.root.innerHTML;
+      setSaveStatus('Saving...');
+      fetch(`/documents/${docId}/autosave`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: html, summary: 'Live collaboration sync' })
+      }).then((response) => {
+        if (!response.ok) {
+          throw new Error('Unable to save changes');
+        }
+        setSaveStatus('All changes saved.');
+      }).catch(() => {
+        setSaveStatus('Could not save changes.');
+      });
+    }
+
     const exportPdfBtn = document.getElementById('exportPdfBtn');
     if (exportPdfBtn) {
       exportPdfBtn.addEventListener('click', function() {
         window.print();
+      });
+    }
+
+    const exportMarkdownBtn = document.getElementById('exportMarkdownBtn');
+    if (exportMarkdownBtn) {
+      exportMarkdownBtn.addEventListener('click', function() {
+        const markdown = htmlToMarkdown(quill.root.innerHTML);
+        const blob = new Blob([markdown], { type: 'text/markdown;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `${(titleInput.value || 'document').replace(/[^a-z0-9-_]+/gi, '-').toLowerCase()}.md`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+      });
+    }
+
+    const importMarkdownBtn = document.getElementById('importMarkdownBtn');
+    const markdownFileInput = document.getElementById('markdownFileInput');
+    if (importMarkdownBtn && markdownFileInput) {
+      importMarkdownBtn.addEventListener('click', function() {
+        markdownFileInput.click();
+      });
+
+      markdownFileInput.addEventListener('change', function(event) {
+        const file = event.target.files && event.target.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = function() {
+          const html = markdownToHtml(reader.result || '');
+          quill.root.innerHTML = html;
+          setSaveStatus('Importing markdown...');
+          saveEditorContent();
+        };
+        reader.readAsText(file);
+        event.target.value = '';
       });
     }
 
