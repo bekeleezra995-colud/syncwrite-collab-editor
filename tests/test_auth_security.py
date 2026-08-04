@@ -154,6 +154,21 @@ class AppIntegrationTests(unittest.TestCase):
         self.assertIn(b'No shared documents.', response.data)
         self.assertIn(b'No recent documents.', response.data)
 
+    def test_document_view_shows_presence_summary_for_current_user(self):
+        self.register('Owner', 'owner6@example.com', 'StrongPass1!')
+        self.login('owner6@example.com', 'StrongPass1!')
+        self.client.post('/documents/new', data={'title': 'Presence Summary Doc'}, follow_redirects=True)
+
+        conn = get_db()
+        doc = conn.execute('SELECT id FROM documents WHERE title = ?', ('Presence Summary Doc',)).fetchone()
+        conn.close()
+        self.assertIsNotNone(doc)
+
+        response = self.client.get(f'/documents/{doc["id"]}')
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b'Viewing now', response.data)
+        self.assertIn(b'You are online', response.data)
+
     def test_socketio_collaboration_broadcasts_document_updates(self):
         self.register('Owner', 'owner6@example.com', 'StrongPass1!')
         self.login('owner6@example.com', 'StrongPass1!')

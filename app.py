@@ -536,7 +536,18 @@ def document_detail(document_id):
     revisions = conn.execute('SELECT r.*, u.name AS editor_name FROM revisions r JOIN users u ON u.id = r.created_by WHERE r.document_id = ? ORDER BY r.created_at DESC', (document_id,)).fetchall()
     conn.execute('UPDATE documents SET last_opened_at = CURRENT_TIMESTAMP WHERE id = ?', (document_id,))
     conn.commit(); conn.close()
-    return render_template('editor.html', document=doc, permission=permission, comments=comments, revisions=revisions, current_user=user, active_users=get_presence_for_document(document_id), owner_name=owner['name'] if owner else 'Unknown')
+
+    active_users = get_presence_for_document(document_id)
+    if not any(str(entry['user_id']) == str(user['id']) for entry in active_users):
+        active_users.insert(0, {
+            'user_id': user['id'],
+            'name': user['name'],
+            'cursor': None,
+            'typing': False,
+            'status': 'online',
+        })
+
+    return render_template('editor.html', document=doc, permission=permission, comments=comments, revisions=revisions, current_user=user, active_users=active_users, owner_name=owner['name'] if owner else 'Unknown')
 
 
 @app.route('/documents/<int:document_id>/rename', methods=['POST'])
@@ -713,7 +724,7 @@ def handle_join_document(payload):
     room = f'document_{document_id}'
     join_room(room)
     update_presence(document_id, user['id'], user['name'], request.sid)
-    emit('presence_update', {'users': get_presence_for_document(document_id)}, room=room)
+    emit('presence_update', {'users': get_presence_for_document(document_id)}, room=room, include_self=True)
     doc = get_document(document_id)
     if doc:
         emit('document_state', {'title': doc['title'], 'content': doc['content']})
