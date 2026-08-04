@@ -1,7 +1,10 @@
-﻿import os
+﻿import json
+import os
 import secrets
 import smtplib
 import sqlite3
+import urllib.error
+import urllib.request
 from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
 from functools import wraps
@@ -23,6 +26,7 @@ app = Flask(__name__)
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "syncwrite-dev-secret")
 app.config["SESSION_COOKIE_HTTPONLY"] = True
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+app.config["FIREBASE_API_KEY"] = os.environ.get("FIREBASE_API_KEY", "AIzaSyD6uplO-rXInBhbqGgoeJVd08-qjwHijjs")
 
 socketio = SocketIO(app, cors_allowed_origins="*")
 DB_PATH = os.path.join(os.path.dirname(__file__), "syncwrite.db")
@@ -380,6 +384,68 @@ def login():
         return render_template('index.html', error='Invalid email or password.', show_register=False)
 
     return render_template('index.html', show_register=False)
+
+
+@app.route('/google-login', methods=['POST'])
+def google_login():
+    data = request.get_json(silent=True) or {}
+    id_token = data.get('token')
+
+    if not id_token:
+        return jsonify(error='Missing Google token'), 400
+
+    api_key = app.config.get('FIREBASE_API_KEY')
+    if not api_key:
+        return jsonify(error='Firebase API key is not configured'), 500
+
+    verify_url = f'https://identitytoolkit.googleapis.com/v1/accounts:lookup?key={api_key}'
+    payload = json.dumps({'idToken': id_token}).encode('utf-8')
+
+    try:
+        req = urllib.request.Request(verify_url, data=payload, headers={'Content-Type': 'application/json'})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            token_data = json.loads(resp.read().decode('utf-8'))
+    except urllib.error.HTTPError as exc:
+        try:
+            error_body = json.loads(exc.read().decode('utf-8'))
+            message = error_body.get('error', {}).get('message', 'Invalid token')
+        except Exception:
+            message = 'Invalid token'
+        return jsonify(error=f'Google token verification failed: {message}'), 400
+    except Exception:
+        return jsonify(error='Unable to verify Google token'), 500
+
+    users = token_data.get('users')
+    if not users:
+        return jsonify(error='Invalid Google sign-in token'), 400
+
+    user_info = users[0]
+    email = (user_info.get('email') or '').strip().lower()
+    display_name = user_info.get('displayName') or email.split('@')[0]
+
+    if not email:
+        return jsonify(error='Unable to read email from Google account'), 400
+
+    conn = get_db()
+    user = conn.execute('SELECT * FROM users WHERE email = ?', (email,)).fetchone()
+
+    if not user:
+        password_hash = generate_password_hash(secrets.token_urlsafe(32))
+        conn.execute('INSERT INTO users (name, email, password) VALUES (?, ?, ?)', (display_name, email, password_hash))
+        conn.commit()
+        user = conn.execute('SELECT * FROM users WHERE email = ?', (email,)).fetchone()
+
+    conn.close()
+
+    session['user_id'] = user['id']
+    session['user_name'] = user['name']
+    return jsonify(success=True)
+
+
+@app.route('/home')
+@login_required
+def home():
+    return redirect(url_for('dashboard'))
 
 
 @app.route('/logout')
